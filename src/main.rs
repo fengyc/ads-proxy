@@ -201,7 +201,7 @@ struct Args {
     pub buffer_size: usize,
 
     /// Extra ams_net_id routes, e.g. 10.10.10.10.10.10
-    #[arg(long)]
+    #[arg(short, long)]
     pub route: Vec<AmsNetId>,
 
     /// PLC username (optional, to add route)
