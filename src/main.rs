@@ -3,6 +3,7 @@ use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::Cursor;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{ensure, Result};
@@ -35,6 +36,24 @@ impl<'a> TryFrom<&'a [u8]> for AmsNetId {
         let mut net_id = AmsNetId::default();
         net_id.0.copy_from_slice(value);
         Ok(net_id)
+    }
+}
+
+impl FromStr for AmsNetId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let parts: Vec<u8> = s.split('.').map(|x| x.parse().unwrap()).collect();
+        ensure!(parts.len() == 6, "invalid AmsNetId");
+        let mut ams_net_id = AmsNetId::default();
+        ams_net_id.0[..6].copy_from_slice(&parts[..6]);
+        Ok(ams_net_id)
+    }
+}
+
+impl From<AmsNetId> for ads::AmsNetId {
+    fn from(value: AmsNetId) -> Self {
+        ads::AmsNetId::from_slice(&value.0).unwrap()
     }
 }
 
@@ -179,13 +198,29 @@ struct Args {
 
     /// Maximum AMS packet size
     #[arg(short, long, default_value_t = 65536)]
-    pub packet_size: usize,
+    pub buffer_size: usize,
 
-    /// Local listen address, e.g. 127.0.0.1:48898
+    /// Automatically adding routes
+    #[arg(short = 'r', long, default_value_t = false)]
+    pub add_route: bool,
+
+    /// PLC username (optional, to add router)
+    #[arg(short, long)]
+    pub username: Option<String>,
+
+    /// PLC password (optional, to add router)
+    #[arg(short, long)]
+    pub password: Option<String>,
+
+    /// Proxy host name (optional, hostname or ip)
+    #[arg(long)]
+    pub host: Option<String>,
+
+    /// Local listen address, e.g. 172.18.0.100:48898
     pub listen_addr: SocketAddr,
 
-    /// ADS backend tcp address, e.g. 172.18.0.10:48898
-    pub backend_addr: SocketAddr,
+    /// ADS backend plc address, e.g. 172.18.0.10:48898
+    pub plc_addr: SocketAddr,
 }
 
 async fn read_ams_packet<T>(socket_addr: SocketAddr, reader: &mut T, buf: &mut [u8]) -> Result<usize>
@@ -233,17 +268,24 @@ async fn main() -> Result<()> {
     env_logger::init_from_env(Env::default().default_filter_or(log_level));
 
     // buffer size per connection
-    let buffer_size = args.packet_size;
-    let backend_addr = args.backend_addr;
+    let buffer_size = args.buffer_size;
+    let plc_addr = args.plc_addr;
+    let add_route = args.add_route;
+    let username = args.username;
+    let password = args.password;
 
     // global forward tables
     let forward_table = Arc::new(RwLock::new(HashMap::new()));
 
-    // connect backend
-    log::info!("connecting ads {}...", backend_addr);
-    let ads_client = TcpStream::connect(backend_addr).await?;
+    // connect plc backend
+    log::info!("connecting ads {}...", plc_addr);
+    let ads_client = TcpStream::connect(plc_addr).await?;
+    let local_addr = ads_client.local_addr().unwrap();
     let (mut ads_read, ads_write) = ads_client.into_split();
     let ads_write = Arc::new(Mutex::new(ads_write));
+
+    // host or ip in add route request
+    let proxy_host = args.host.unwrap_or(local_addr.ip().to_string());
 
     // listen for client
     log::info!("listening {}...", args.listen_addr);
@@ -262,6 +304,9 @@ async fn main() -> Result<()> {
             // reading
             let forward_table = forward_table_clone.clone();
             let plc_write = ads_write.clone();
+            let username = username.clone();
+            let password = password.clone();
+            let proxy_host = proxy_host.clone();
             tokio::spawn(async move {
                 let mut buff = vec![0; buffer_size];
 
@@ -281,10 +326,26 @@ async fn main() -> Result<()> {
 
                     // update forward table
                     let socket_info = (socket_addr, client_write.clone());
-                    if let Some(r) = forward_table.write().await.insert(ams_addr, socket_info) {
+                    let mut forward_table = forward_table.write().await;
+                    let mut update_route = forward_table.get(&ams_addr).is_none();
+                    if let Some(r) = forward_table.insert(ams_addr, socket_info) {
                         if r.0 != socket_addr {
                             log::info!("update {} socket {} -> {}", ams_addr, r.0, socket_addr);
+                            update_route = true;
                         }
+                    }
+
+                    // add route as needed
+                    if add_route && update_route {
+                        let _ = ads::udp::add_route(
+                            (&plc_addr.ip().to_string(), ads::UDP_PORT),
+                            ams_addr.0.into(),
+                            &proxy_host,
+                            None,
+                            username.as_deref(),
+                            password.as_deref(),
+                            true,
+                        );
                     }
 
                     // forward to plc
@@ -305,7 +366,7 @@ async fn main() -> Result<()> {
     // plc reading loop
     loop {
         let mut buff = vec![0; buffer_size];
-        match read_ams_packet(backend_addr, &mut ads_read, &mut buff).await {
+        match read_ams_packet(plc_addr, &mut ads_read, &mut buff).await {
             Ok(size) => {
                 // parse ams header
                 let ams_header = AmsHeaderSlice::try_from(&buff[AmsTcpHeaderSlice::SIZE..]).unwrap();
