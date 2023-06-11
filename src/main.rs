@@ -200,19 +200,15 @@ struct Args {
     #[arg(short, long, default_value_t = 65536)]
     pub buffer_size: usize,
 
-    /// Automatically adding routes
-    #[arg(short = 'r', long, default_value_t = false)]
-    pub add_route: bool,
-
-    /// Extra routes
+    /// Extra ams_net_id routes, e.g. 10.10.10.10.10.10
     #[arg(long)]
     pub route: Vec<AmsNetId>,
 
-    /// PLC username (optional, to add router)
+    /// PLC username (optional, to add route)
     #[arg(short, long)]
     pub username: Option<String>,
 
-    /// PLC password (optional, to add router)
+    /// PLC password (optional, to add route)
     #[arg(short, long)]
     pub password: Option<String>,
 
@@ -274,7 +270,6 @@ async fn main() -> Result<()> {
     // buffer size per connection
     let buffer_size = args.buffer_size;
     let plc_addr = args.plc_addr;
-    let add_route = args.add_route;
     let username = args.username;
     let password = args.password;
 
@@ -289,18 +284,33 @@ async fn main() -> Result<()> {
     log::info!("plc os_version={:?}", plc_info.os_version);
     log::info!("plc fingerprint={}", plc_info.fingerprint);
 
-    // TODO: add extra route
+    // add extra route
+    let plc_client = TcpStream::connect(plc_addr).await?;
+    let local_addr = plc_client.local_addr().unwrap();
+    let proxy_host = args.host.unwrap_or(local_addr.ip().to_string());
+    log::debug!("add route, host {}", proxy_host);
+    for ams_net_id in args.route {
+        log::info!("add route {} to plc", ams_net_id);
+        let route_name = format!("route-{}", ams_net_id);
+        if let Err(e) = ads::udp::add_route(
+            (&plc_addr.ip().to_string(), ads::UDP_PORT),
+            ams_net_id.into(),
+            &proxy_host,
+            Some(&route_name),
+            username.as_deref(),
+            password.as_deref(),
+            true,
+        ) {
+            log::error!("add route {} error: {}", ams_net_id, e);
+            break;
+        }
+    }
 
     // connect plc backend
     log::info!("connecting ads {}...", plc_addr);
     let ads_client = TcpStream::connect(plc_addr).await?;
-    let local_addr = ads_client.local_addr().unwrap();
     let (mut ads_read, ads_write) = ads_client.into_split();
     let ads_write = Arc::new(Mutex::new(ads_write));
-
-    // host or ip in add route request
-    let proxy_host = args.host.unwrap_or(local_addr.ip().to_string());
-    log::debug!("host ip {}", proxy_host);
 
     // listen for client
     log::info!("listening {}...", args.listen_addr);
@@ -319,9 +329,6 @@ async fn main() -> Result<()> {
             // reading
             let forward_table = forward_table_clone.clone();
             let plc_write = ads_write.clone();
-            let username = username.clone();
-            let password = password.clone();
-            let proxy_host = proxy_host.clone();
             tokio::spawn(async move {
                 let mut buff = vec![0; buffer_size];
 
@@ -341,32 +348,12 @@ async fn main() -> Result<()> {
 
                     // update forward table
                     let socket_info = (socket_addr, client_write.clone());
-                    let mut update_route = false;
                     if let Some(r) = forward_table.write().await.insert(ams_addr, socket_info) {
                         if r.0 != socket_addr {
                             log::info!("replace table entry {} socket {} -> {}", ams_addr, r.0, socket_addr);
-                            update_route = true;
                         }
                     } else {
                         log::info!("add table entry {} socket {}", ams_addr, socket_addr);
-                        update_route = true;
-                    }
-
-                    // add route as needed
-                    if add_route && update_route {
-                        log::info!("add route {} to plc", ams_addr.0);
-                        if let Err(e) = ads::udp::add_route(
-                            (&plc_addr.ip().to_string(), ads::UDP_PORT),
-                            ams_addr.0.into(),
-                            &proxy_host,
-                            None,
-                            username.as_deref(),
-                            password.as_deref(),
-                            true,
-                        ) {
-                            log::error!("add route {} error: {}", ams_addr.0, e);
-                            break;
-                        }
                     }
 
                     // forward to plc
@@ -379,8 +366,8 @@ async fn main() -> Result<()> {
                 }
 
                 // reading stop
-                // TODO stop
                 log::info!("reading {} stop", socket_addr);
+                forward_table.write().await.retain(|_, x| x.0 != socket_addr);
             });
         }
     });
