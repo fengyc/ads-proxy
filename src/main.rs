@@ -326,13 +326,15 @@ async fn main() -> Result<()> {
 
                     // update forward table
                     let socket_info = (socket_addr, client_write.clone());
-                    let mut forward_table = forward_table.write().await;
-                    let mut update_route = forward_table.get(&ams_addr).is_none();
-                    if let Some(r) = forward_table.insert(ams_addr, socket_info) {
+                    let mut update_route = false;
+                    if let Some(r) = forward_table.write().await.insert(ams_addr, socket_info) {
                         if r.0 != socket_addr {
-                            log::info!("update {} socket {} -> {}", ams_addr, r.0, socket_addr);
+                            log::info!("replace table entry {} socket {} -> {}", ams_addr, r.0, socket_addr);
                             update_route = true;
                         }
+                    } else {
+                        log::info!("add table entry {} socket {}", ams_addr, socket_addr);
+                        update_route = true;
                     }
 
                     // add route as needed
