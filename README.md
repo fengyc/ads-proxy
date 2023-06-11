@@ -1,5 +1,7 @@
 # ADS proxy
 
+[![build-main](https://github.com/fengyc/ads-proxy/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/fengyc/ads-proxy/actions/workflows/main.yml)
+
 This is a [Beckhoff ADS][ads] proxy that could resolve multiple connections with same ip address issues.
 
 * ads issue: https://github.com/Beckhoff/ADS/issues/49

@@ -2,6 +2,14 @@
 name = "ads-proxy"
 version = "0.1.0"
 edition = "2021"
+authors = ["fengyingcai <fengyc.work@gmail.com>"]
+description = "ADS proxy utility"
+homepage = "https://github.com/fengyc/ads-proxy"
+repository = "https://github.com/fengyc/ads-proxy"
+readme = "README.md"
+keywords = ["beckhoff", "ads", "proxy", "multiple connections"]
+categories = ["network-programming"]
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - arm-unknown-linux-musleabi
+          - arm-unknown-linux-musleabihf
+          - aarch64-unknown-linux-musl
+          - x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v2
+      - name: build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo install cross
+          cross build --release --target ${TARGET}
+          (cd target/${TARGET}/release && mv ads-proxy ads-proxy_${TARGET})
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            target/**/ads-proxy_*
+
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - i686-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v2
+      - name: build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup target add $env:TARGET
+          cargo build --release --target $env:TARGET
+          cd target/$env:TARGET/release && mv ads-proxy.exe ads-proxy_$env:TARGET.exe
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            target/**/ads-proxy_*
+
+  release:
+    needs:
+      - build-linux
+      - build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/download-artifact@v3
+      - uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          prerelease: false
+          draft: true
+          files: |
+            **/ads-proxy_*
