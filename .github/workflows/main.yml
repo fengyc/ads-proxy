@@ -76,4 +76,4 @@ jobs:
           prerelease: true
           draft: false
           files: |
-            target/**/ads-proxy_*
+            **/target/**/ads-proxy_*
