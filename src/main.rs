@@ -240,11 +240,13 @@ async fn main() -> Result<()> {
     let forward_table = Arc::new(RwLock::new(HashMap::new()));
 
     // connect backend
+    log::info!("connecting ads {}...", backend_addr);
     let ads_client = TcpStream::connect(backend_addr).await?;
     let (mut ads_read, ads_write) = ads_client.into_split();
     let ads_write = Arc::new(Mutex::new(ads_write));
 
     // listen for client
+    log::info!("listening {}...", args.listen_addr);
     let listener = TcpListener::bind(args.listen_addr).await?;
     let forward_table_clone = forward_table.clone();
     tokio::spawn(async move {
