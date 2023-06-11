@@ -289,6 +289,8 @@ async fn main() -> Result<()> {
     log::info!("plc os_version={:?}", plc_info.os_version);
     log::info!("plc fingerprint={}", plc_info.fingerprint);
 
+    // TODO: add extra route
+
     // connect plc backend
     log::info!("connecting ads {}...", plc_addr);
     let ads_client = TcpStream::connect(plc_addr).await?;
@@ -298,6 +300,7 @@ async fn main() -> Result<()> {
 
     // host or ip in add route request
     let proxy_host = args.host.unwrap_or(local_addr.ip().to_string());
+    log::debug!("host ip {}", proxy_host);
 
     // listen for client
     log::info!("listening {}...", args.listen_addr);
