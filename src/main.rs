@@ -337,7 +337,8 @@ async fn main() -> Result<()> {
 
                     // add route as needed
                     if add_route && update_route {
-                        let _ = ads::udp::add_route(
+                        log::info!("add route {} to plc", ams_addr.0);
+                        if let Err(e) = ads::udp::add_route(
                             (&plc_addr.ip().to_string(), ads::UDP_PORT),
                             ams_addr.0.into(),
                             &proxy_host,
@@ -345,7 +346,10 @@ async fn main() -> Result<()> {
                             username.as_deref(),
                             password.as_deref(),
                             true,
-                        );
+                        ) {
+                            log::error!("add route {} error: {}", ams_addr.0, e);
+                            break;
+                        }
                     }
 
                     // forward to plc
@@ -358,6 +362,7 @@ async fn main() -> Result<()> {
                 }
 
                 // reading stop
+                // TODO stop
                 log::info!("reading {} stop", socket_addr);
             });
         }
