@@ -1,0 +1,37 @@
+name: "build-main"
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - arm-unknown-linux-musleabi
+          - arm-unknown-linux-musleabihf
+          - aarch64-unknown-linux-musl
+          - x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo install cross
+          cross build --release --target ${TARGET}
+          (cd target/${TARGET}/release/ads-proxy && mv ads-proxy ads-proxy_${TARGET})
+
+      - uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          automatic_release_tag: "latest"
+          title: "Dev"
+          prerelease: true
+          draft: false
+          files: |
+            target/**/ads-proxy_*
