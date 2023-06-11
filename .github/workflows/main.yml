@@ -21,6 +21,7 @@ jobs:
           - x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v2
+      - uses: Swatinem/rust-cache@v2
       - name: build
         env:
           TARGET: ${{ matrix.target }}
@@ -44,13 +45,14 @@ jobs:
           - i686-pc-windows-msvc
     steps:
       - uses: actions/checkout@v2
+      - uses: Swatinem/rust-cache@v2
       - name: build
         env:
           TARGET: ${{ matrix.target }}
         run: |
           cargo install cross
           cross build --release --target ${TARGET}
-          cd target/${TARGET}/release && mv ads-proxy.exe ads-proxy_${TARGET}.exe
+          cd target/%TARGET%/release && mv ads-proxy.exe ads-proxy_${TARGET}.exe
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
@@ -59,8 +61,12 @@ jobs:
             target/**/ads-proxy_*
 
   release:
+    needs:
+      - build-linux
+      - build-windows
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v2
       - uses: actions/download-artifact@v3
       - uses: "marvinpinto/action-automatic-releases@latest"
         with:
