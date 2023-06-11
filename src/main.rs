@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{ensure, Result};
+use anyhow::{bail, ensure, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use clap::Parser;
 use env_logger::Env;
@@ -193,33 +193,34 @@ pub fn parse_ams_packet_slice(data: &[u8]) -> Result<(AmsTcpHeaderSlice, AmsHead
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Debug mode
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short, long)]
     pub debug: bool,
 
-    /// Maximum AMS packet size
+    /// Maximum size of AMS packet
     #[arg(short, long, default_value_t = 65536)]
     pub buffer_size: usize,
 
-    /// Extra ams_net_id routes, e.g. 10.10.10.10.10.10
+    /// Optional ams net id route, e.g. 10.10.10.10.1.1
     #[arg(short, long)]
-    pub route: Vec<AmsNetId>,
+    pub route: Option<AmsNetId>,
 
-    /// PLC username (optional, to add route)
+    /// Optional PLC username (to add route)
     #[arg(short, long)]
     pub username: Option<String>,
 
-    /// PLC password (optional, to add route)
+    /// Optional PLC password (to add route)
     #[arg(short, long)]
     pub password: Option<String>,
 
-    /// Proxy host name (optional, hostname or ip)
+    /// Optional Proxy hostname (hostname or ip address, detected from PLC connection)
     #[arg(long)]
     pub host: Option<String>,
 
-    /// Local listen address, e.g. 172.18.0.100:48898
+    /// Proxy listen address
+    #[arg(short, long, default_value = "127.0.0.1:48898")]
     pub listen_addr: SocketAddr,
 
-    /// ADS backend plc address, e.g. 172.18.0.10:48898
+    /// PLC address, e.g. 172.18.0.10:48898
     pub plc_addr: SocketAddr,
 }
 
@@ -289,7 +290,7 @@ async fn main() -> Result<()> {
     let local_addr = plc_client.local_addr().unwrap();
     let proxy_host = args.host.unwrap_or(local_addr.ip().to_string());
     log::debug!("add route, host {}", proxy_host);
-    for ams_net_id in args.route {
+    if let Some(ams_net_id) = args.route {
         log::info!("add route {} to plc", ams_net_id);
         let route_name = format!("route-{}", ams_net_id);
         if let Err(e) = ads::udp::add_route(
@@ -301,16 +302,15 @@ async fn main() -> Result<()> {
             password.as_deref(),
             true,
         ) {
-            log::error!("add route {} error: {}", ams_net_id, e);
-            break;
+            bail!("add route {} error: {}", ams_net_id, e);
         }
     }
 
     // connect plc backend
-    log::info!("connecting ads {}...", plc_addr);
-    let ads_client = TcpStream::connect(plc_addr).await?;
-    let (mut ads_read, ads_write) = ads_client.into_split();
-    let ads_write = Arc::new(Mutex::new(ads_write));
+    log::info!("connecting plc {}...", plc_addr);
+    let plc_client = TcpStream::connect(plc_addr).await?;
+    let (mut plc_read, plc_write) = plc_client.into_split();
+    let plc_write = Arc::new(Mutex::new(plc_write));
 
     // listen for client
     log::info!("listening {}...", args.listen_addr);
@@ -328,7 +328,7 @@ async fn main() -> Result<()> {
 
             // reading
             let forward_table = forward_table_clone.clone();
-            let plc_write = ads_write.clone();
+            let plc_write = plc_write.clone();
             tokio::spawn(async move {
                 let mut buff = vec![0; buffer_size];
 
@@ -361,7 +361,6 @@ async fn main() -> Result<()> {
                         log::error!("forward {}({}) to plc error: {}", ams_addr, socket_addr, e);
                         break;
                     }
-
                     log::debug!("forward {}({}) to plc, size {}", ams_addr, socket_addr, size);
                 }
 
@@ -375,7 +374,7 @@ async fn main() -> Result<()> {
     // plc reading loop
     loop {
         let mut buff = vec![0; buffer_size];
-        match read_ams_packet(plc_addr, &mut ads_read, &mut buff).await {
+        match read_ams_packet(plc_addr, &mut plc_read, &mut buff).await {
             Ok(size) => {
                 // parse ams header
                 let ams_header = AmsHeaderSlice::try_from(&buff[AmsTcpHeaderSlice::SIZE..]).unwrap();
