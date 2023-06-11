@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{ensure, Result};
-use byteorder::{NetworkEndian, ReadBytesExt};
+use byteorder::{LittleEndian, ReadBytesExt};
 use clap::Parser;
 use env_logger::Env;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -58,12 +58,12 @@ impl AmsTcpHeaderSlice<'_> {
 
     pub fn reserved(&self) -> u16 {
         let mut rdr = Cursor::new(&self.data[0..2]);
-        ReadBytesExt::read_u16::<NetworkEndian>(&mut rdr).unwrap()
+        ReadBytesExt::read_u16::<LittleEndian>(&mut rdr).unwrap()
     }
 
     pub fn length(&self) -> u32 {
         let mut rdr = Cursor::new(&self.data[2..6]);
-        ReadBytesExt::read_u32::<NetworkEndian>(&mut rdr).unwrap()
+        ReadBytesExt::read_u32::<LittleEndian>(&mut rdr).unwrap()
     }
 }
 
@@ -93,12 +93,12 @@ impl AmsHeaderSlice<'_> {
 
     fn read_u16(&self, offset: usize) -> u16 {
         let mut rdr = Cursor::new(&self.data[offset..offset + 2]);
-        ReadBytesExt::read_u16::<NetworkEndian>(&mut rdr).unwrap()
+        ReadBytesExt::read_u16::<LittleEndian>(&mut rdr).unwrap()
     }
 
     fn read_u32(&self, offset: usize) -> u32 {
         let mut rdr = Cursor::new(&self.data[offset..offset + 4]);
-        ReadBytesExt::read_u32::<NetworkEndian>(&mut rdr).unwrap()
+        ReadBytesExt::read_u32::<LittleEndian>(&mut rdr).unwrap()
     }
 
     pub fn target_net_id(&self) -> AmsNetId {
