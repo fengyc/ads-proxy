@@ -204,6 +204,10 @@ struct Args {
     #[arg(short = 'r', long, default_value_t = false)]
     pub add_route: bool,
 
+    /// Extra routes
+    #[arg(long)]
+    pub route: Vec<AmsNetId>,
+
     /// PLC username (optional, to add router)
     #[arg(short, long)]
     pub username: Option<String>,
@@ -276,6 +280,14 @@ async fn main() -> Result<()> {
 
     // global forward tables
     let forward_table = Arc::new(RwLock::new(HashMap::new()));
+
+    // get plc info
+    let plc_info = ads::udp::get_info((&plc_addr.ip().to_string(), ads::UDP_PORT))?;
+    log::info!("plc net_id={}", plc_info.netid);
+    log::info!("plc hostname={}", plc_info.hostname);
+    log::info!("plc twincat_version={:?}", plc_info.twincat_version);
+    log::info!("plc os_version={:?}", plc_info.os_version);
+    log::info!("plc fingerprint={}", plc_info.fingerprint);
 
     // connect plc backend
     log::info!("connecting ads {}...", plc_addr);
