@@ -280,8 +280,8 @@ async fn main() -> Result<()> {
                     let ams_addr = AmsAddr(ams_header_slice.source_net_id(), ams_header_slice.source_port());
 
                     // update forward table
-                    let client_socket = (socket_addr, client_write.clone());
-                    if let Some(r) = forward_table.write().await.insert(ams_addr, client_socket) {
+                    let socket_info = (socket_addr, client_write.clone());
+                    if let Some(r) = forward_table.write().await.insert(ams_addr, socket_info) {
                         if r.0 != socket_addr {
                             log::info!("update {} socket {} -> {}", ams_addr, r.0, socket_addr);
                         }
@@ -309,7 +309,7 @@ async fn main() -> Result<()> {
             Ok(size) => {
                 // parse ams header
                 let ams_header = AmsHeaderSlice::try_from(&buff[AmsTcpHeaderSlice::SIZE..]).unwrap();
-                let ams_addr = AmsAddr(ams_header.source_net_id(), ams_header.source_port());
+                let ams_addr = AmsAddr(ams_header.target_net_id(), ams_header.target_port());
 
                 // forward
                 let mut has_error = false;
