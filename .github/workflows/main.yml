@@ -50,9 +50,9 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          rustup target add $TARGET
-          cargo build --release --target $TARGET
-          cd target/$TARGET/release && mv ads-proxy.exe ads-proxy_$TARGET.exe
+          rustup target add $env:TARGET
+          cargo build --release --target $env:TARGET
+          cd target/$env:TARGET/release && mv ads-proxy.exe ads-proxy_$env:TARGET.exe
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
