@@ -37,10 +37,12 @@ In pyads, connect to `ads-proxy`. For example, client 1 and 2 on a host:
 * client 1 `ams_net_id=10.10.10.10.1.1`
 * client 2 `ams_net_id=10.10.10.10.1.2`
 
-(Might need to add route entry in shell command with `-r` or in PLC configuration)
+Might need to add route entry in shell command with `-r` or in PLC configuration, see [default user and password][password]
+
+[password]: https://infosys.beckhoff.com/english.php?content=../content/1033/sw_os/2019206411.html&id=3176926840725427056
 
 ```shell
-ads-proxy -d 192.168.0.10:48898
+ads-proxy -r 10.10.10.10.1.1 192.168.0.10:48898
 ```
 
 ```python
@@ -53,6 +55,19 @@ pyads.close_port()
 plc = pyads.Connection(ams_net_id="192.168.0.10.1.1", ams_net_port=851, ip_address="127.0.0.1")
 with plc:
     ...
+```
+
+## How it works
+
+```text
+client 1        --|
+10.10.10.10.1.1   |
+                  | multi-connections            one connection
+client 2        ---------------------> ads-proxy --------------> PLC
+10.10.10.10.1.2   |                    a.b.c.d          route 10.10.10.10.1.1
+                  |                                            a.b.c.d
+client n        --|   
+10.10.10.10.x.y
 ```
 
 ## License

@@ -288,15 +288,15 @@ async fn main() -> Result<()> {
     // add extra route
     let plc_client = TcpStream::connect(plc_addr).await?;
     let local_addr = plc_client.local_addr().unwrap();
-    let proxy_host = args.host.unwrap_or(local_addr.ip().to_string());
-    log::debug!("add route, host {}", proxy_host);
+    let host = args.host.unwrap_or(local_addr.ip().to_string());
+    log::debug!("add route, host {}", host);
     if let Some(ams_net_id) = args.route {
         log::info!("add route {} to plc", ams_net_id);
         let route_name = format!("route-{}", ams_net_id);
         if let Err(e) = ads::udp::add_route(
             (&plc_addr.ip().to_string(), ads::UDP_PORT),
             ams_net_id.into(),
-            &proxy_host,
+            &host,
             Some(&route_name),
             username.as_deref(),
             password.as_deref(),
@@ -309,8 +309,8 @@ async fn main() -> Result<()> {
     // connect plc backend
     log::info!("connecting plc {}...", plc_addr);
     let plc_client = TcpStream::connect(plc_addr).await?;
-    let (mut plc_read, plc_write) = plc_client.into_split();
-    let plc_write = Arc::new(Mutex::new(plc_write));
+    let (mut plc_read, plc_write) = plc_client.into_split(); // split
+    let plc_write = Arc::new(Mutex::new(plc_write)); // shared plc write half
 
     // listen for client
     log::info!("listening {}...", args.listen_addr);
