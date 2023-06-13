@@ -13,8 +13,8 @@ use clap::Parser;
 use env_logger::Env;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::select;
 use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::{join, select};
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct AmsNetId(pub [u8; 6]);
@@ -477,7 +477,7 @@ async fn accept_client(args: Arc<Args>, table: Table) -> Result<()> {
             // clean table
             table.write().await.retain(|a, x| {
                 if x.0 == remote {
-                    log::info!("remove table {} socket {}", a, x.0);
+                    log::info!("remove table entry {} socket {}", a, x.0);
                     false
                 } else {
                     true
