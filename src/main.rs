@@ -384,8 +384,8 @@ where
     Ok(())
 }
 
-async fn connect_plc(args: Arc<Args>, table: Table, stop_rx: EventReceiver) -> Result<()> {
-    let mut global_stop_rx = stop_rx;
+async fn connect_plc(args: Arc<Args>, table: Table, global_stop_rx: EventReceiver) -> Result<()> {
+    let mut global_stop_rx = global_stop_rx;
 
     // detect plc info
     let plc_info = ads::udp::get_info((&args.plc_addr.ip().to_string(), ads::UDP_PORT))?;
@@ -446,8 +446,8 @@ async fn connect_plc(args: Arc<Args>, table: Table, stop_rx: EventReceiver) -> R
     Ok(())
 }
 
-async fn accept_client(args: Arc<Args>, table: Table, stop_receiver: EventReceiver) -> Result<()> {
-    let mut global_stop_rx = stop_receiver;
+async fn accept_client(args: Arc<Args>, table: Table, global_stop_rx: EventReceiver) -> Result<()> {
+    let mut global_stop_rx = global_stop_rx;
 
     let server: TcpListener = TcpListener::bind(args.listen_addr).await?;
 
@@ -483,7 +483,6 @@ async fn accept_client(args: Arc<Args>, table: Table, stop_receiver: EventReceiv
             if let Err(e) = stop_tx.send(()) {
                 log::error!("stop client {} error: {}", remote, e);
             }
-            data_tx.send(BytesMut::with_capacity(0)).await;
 
             // clean table
             table.write().await.retain(|a, x| {
