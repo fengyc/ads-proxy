@@ -8,11 +8,13 @@ use std::sync::Arc;
 
 use anyhow::{bail, ensure, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
+use bytes::{Buf, BytesMut};
 use clap::Parser;
 use env_logger::Env;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, RwLock};
+use tokio::select;
+use tokio::sync::{broadcast, mpsc, RwLock};
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct AmsNetId(pub [u8; 6]);
@@ -54,6 +56,12 @@ impl FromStr for AmsNetId {
 impl From<AmsNetId> for ads::AmsNetId {
     fn from(value: AmsNetId) -> Self {
         ads::AmsNetId::from_slice(&value.0).unwrap()
+    }
+}
+
+impl From<ads::AmsNetId> for AmsNetId {
+    fn from(value: ads::AmsNetId) -> Self {
+        AmsNetId(value.0)
     }
 }
 
@@ -224,7 +232,7 @@ struct Args {
     pub plc_addr: SocketAddr,
 }
 
-async fn read_ams_packet<T>(socket_addr: SocketAddr, reader: &mut T, buf: &mut [u8]) -> Result<usize>
+async fn read_ams_packet<T>(reader: &mut T, buf: &mut [u8]) -> Result<usize>
 where
     T: AsyncRead + Unpin,
 {
@@ -241,7 +249,6 @@ where
     to_read = AmsTcpHeaderSlice::SIZE;
     reader.read_exact(&mut buf[..to_read]).await?;
     let ams_tcp_header = AmsTcpHeaderSlice::try_from(&buf[..to_read])?;
-    log::debug!("socket {} AmsTcpHeader: {}", socket_addr, ams_tcp_header);
     size = to_read;
 
     // check buffer again
@@ -253,156 +260,235 @@ where
     // read ams packet content
     to_read = size + ams_tcp_header.length() as usize;
     reader.read_exact(&mut buf[size..to_read]).await?;
-    let ams_header = AmsHeaderSlice::try_from(&buf[size..])?;
-    log::debug!("socket {} AmsHeader: {}", socket_addr, ams_header);
     size = to_read;
 
     Ok(size)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
+type EventSender = broadcast::Sender<()>;
+type EventReceiver = broadcast::Receiver<()>;
+type DataSender = mpsc::Sender<BytesMut>;
+type DataReceiver = mpsc::Receiver<BytesMut>;
 
-    // init logging
-    let log_level = if args.debug { "debug" } else { "info" };
-    env_logger::init_from_env(Env::default().default_filter_or(log_level));
+type Table = Arc<RwLock<HashMap<AmsAddr, (SocketAddr, DataSender)>>>;
 
-    // buffer size per connection
-    let buffer_size = args.buffer_size;
-    let plc_addr = args.plc_addr;
-    let username = args.username;
-    let password = args.password;
+async fn reading<T>(
+    remote: SocketAddr,
+    reader: T,
+    stop_rx: EventReceiver,
+    max_packet_size: usize,
+    data_tx: DataSender,
+    table: Table,
+) -> Result<()>
+where
+    T: AsyncRead + Unpin,
+{
+    let mut reader = reader;
+    let mut buffer = BytesMut::with_capacity(max_packet_size);
+    let mut stop_rx = stop_rx;
 
-    // global forward tables
-    let forward_table = Arc::new(RwLock::new(HashMap::new()));
+    loop {
+        // prepare buffer
+        buffer.reserve(max_packet_size);
+        unsafe { buffer.set_len(max_packet_size) };
 
-    // get plc info
-    let plc_info = ads::udp::get_info((&plc_addr.ip().to_string(), ads::UDP_PORT))?;
+        // read packet until error or stopped
+        let n = select! {
+            _ = stop_rx.recv() => break,
+            r = read_ams_packet(&mut reader, &mut buffer[..]) => r?,
+        };
+        unsafe { buffer.set_len(n) };
+
+        // parse result
+        let ams_header = parse_ams_packet_slice(&buffer)?.1;
+        let source_ams_addr = AmsAddr(ams_header.source_net_id(), ams_header.source_port());
+        let target_ams_addr = AmsAddr(ams_header.target_net_id(), ams_header.target_port());
+
+        // update forward table
+        if Some(true) != table.read().await.get(&source_ams_addr).map(|x| x.0 == remote) {
+            log::info!("update forward table {} socket {}", source_ams_addr, remote);
+            let mut table = table.write().await;
+            table.insert(source_ams_addr, (remote, data_tx.clone()));
+        }
+
+        // forward data
+        let packet = buffer.split();
+        let forward_table = table.read().await;
+        let target = forward_table.get(&target_ams_addr);
+        let target = target.or_else(|| forward_table.get(&AmsAddr(target_ams_addr.0, 0)));
+        if let Some((target_remote, target_sender)) = target {
+            log::debug!("forward {} to socket {}", target_ams_addr, target_remote);
+            target_sender.send(packet).await?;
+        } else {
+            log::debug!("can not handle {}", target_ams_addr)
+        }
+    }
+
+    log::info!("reading socket {} stopped", remote);
+
+    Ok(())
+}
+
+async fn writing<T>(
+    socket_addr: SocketAddr,
+    writer: T,
+    stop_receiver: EventReceiver,
+    receiver: DataReceiver,
+) -> Result<()>
+where
+    T: AsyncWrite + Unpin,
+{
+    let mut writer = writer;
+    let mut stop_receiver = stop_receiver;
+    let mut receiver = receiver;
+    loop {
+        // read packet
+        let packet = select! {
+            _ = stop_receiver.recv() => break,
+            p = receiver.recv() => match p {
+                Some(p) => p,
+                _ => break,
+            },
+        };
+        // write data
+        select! {
+            _ = stop_receiver.recv() => break,
+            r = writer.write_all(&packet) => r?,
+        }
+        log::debug!("write socket {} {} bytes", socket_addr, packet.len());
+    }
+
+    log::info!("writing socket {} stopped", socket_addr);
+
+    Ok(())
+}
+
+async fn connect_plc(args: Arc<Args>, table: Table, stop_rx: EventReceiver) -> Result<()> {
+    let mut global_stop_rx = stop_rx;
+
+    // detect plc info
+    let plc_info = ads::udp::get_info((&args.plc_addr.ip().to_string(), ads::UDP_PORT))?;
     log::info!("plc net_id={}", plc_info.netid);
     log::info!("plc hostname={}", plc_info.hostname);
     log::info!("plc twincat_version={:?}", plc_info.twincat_version);
     log::info!("plc os_version={:?}", plc_info.os_version);
     log::info!("plc fingerprint={}", plc_info.fingerprint);
 
+    // connect plc backend
+    log::info!("connecting plc {}...", args.plc_addr);
+    let plc_client = TcpStream::connect(args.plc_addr).await?;
+    let plc_addr = plc_client.peer_addr()?;
+    let host_addr = plc_client.local_addr()?;
+
     // add extra route
-    let plc_client = TcpStream::connect(plc_addr).await?;
-    let local_addr = plc_client.local_addr().unwrap();
-    let host = args.host.unwrap_or(local_addr.ip().to_string());
-    log::debug!("add route, host {}", host);
     if let Some(ams_net_id) = args.route {
-        log::info!("add route {} to plc", ams_net_id);
-        let route_name = format!("route-{}", ams_net_id);
-        if let Err(e) = ads::udp::add_route(
+        let route_host = args.host.clone().unwrap_or(host_addr.ip().to_string());
+        log::info!("add route {} host {} to plc", ams_net_id, route_host);
+        ads::udp::add_route(
             (&plc_addr.ip().to_string(), ads::UDP_PORT),
             ams_net_id.into(),
-            &host,
-            Some(&route_name),
-            username.as_deref(),
-            password.as_deref(),
+            route_host.as_str(),
+            None,
+            args.username.as_deref(),
+            args.password.as_deref(),
             true,
-        ) {
-            bail!("add route {} error: {}", ams_net_id, e);
-        }
+        )?;
     }
 
-    // connect plc backend
-    log::info!("connecting plc {}...", plc_addr);
-    let plc_client = TcpStream::connect(plc_addr).await?;
-    let (mut plc_read, plc_write) = plc_client.into_split(); // split
-    let plc_write = Arc::new(Mutex::new(plc_write)); // shared plc write half
+    // prepare queues
+    let (read, write) = plc_client.into_split();
+    let (data_tx, data_rx) = mpsc::channel(128);
+    let (stop_tx, stop_rx) = broadcast::channel(1);
 
-    // listen for client
-    log::info!("listening {}...", args.listen_addr);
-    let listener = TcpListener::bind(args.listen_addr).await?;
-    let forward_table_clone = forward_table.clone();
-    tokio::spawn(async move {
-        loop {
-            // accept new client
-            let (client, socket_addr) = listener.accept().await.unwrap();
-            log::info!("new socket {}", socket_addr);
+    // update forward table with plc ams net id
+    let plc_ams_net_id = args.route.unwrap_or(plc_info.netid.into());
+    let plc_ams_addr = AmsAddr(plc_ams_net_id, 0);
+    table.write().await.insert(plc_ams_addr, (plc_addr, data_tx.clone()));
 
-            // split reading and writing
-            let (mut client_read, client_write) = client.into_split();
-            let client_write = Arc::new(Mutex::new(client_write));
+    // run until error or stopped
+    let stop_rx1 = stop_rx.resubscribe();
+    let reading = reading(plc_addr, read, stop_rx1, args.buffer_size, data_tx, table);
+    let writing = writing(plc_addr, write, stop_rx, data_rx);
 
-            // reading
-            let forward_table = forward_table_clone.clone();
-            let plc_write = plc_write.clone();
-            tokio::spawn(async move {
-                let mut buff = vec![0; buffer_size];
+    if let Err(e) = select! {
+        r = reading => r,
+        r = writing => r,
+        _ = global_stop_rx.recv() => Ok(())
+    } {
+        log::error!("plc error: {}", e);
+    }
+    stop_tx.send(())?;
 
-                loop {
-                    // read ams packet
-                    let size = match read_ams_packet(socket_addr, &mut client_read, buff.as_mut_slice()).await {
-                        Ok(size) => size,
-                        Err(e) => {
-                            log::error!("read socket {} error: {}", socket_addr, e);
-                            break;
-                        }
-                    };
+    log::warn!("connect plc stopped");
 
-                    // parse packet
-                    let ams_header_slice = AmsHeaderSlice::try_from(&buff[AmsTcpHeaderSlice::SIZE..]).unwrap();
-                    let ams_addr = AmsAddr(ams_header_slice.source_net_id(), ams_header_slice.source_port());
+    Ok(())
+}
 
-                    // update forward table
-                    let socket_info = (socket_addr, client_write.clone());
-                    if let Some(r) = forward_table.write().await.insert(ams_addr, socket_info) {
-                        if r.0 != socket_addr {
-                            log::info!("replace table entry {} socket {} -> {}", ams_addr, r.0, socket_addr);
-                        }
-                    } else {
-                        log::info!("add table entry {} socket {}", ams_addr, socket_addr);
-                    }
+async fn accept_client(args: Arc<Args>, forward_table: Table, stop_receiver: EventReceiver) -> Result<()> {
+    let mut global_stop_rx = stop_receiver;
 
-                    // forward to plc
-                    if let Err(e) = plc_write.lock().await.write_all(&buff[..size]).await {
-                        log::error!("forward {}({}) to plc error: {}", ams_addr, socket_addr, e);
-                        break;
-                    }
-                    log::debug!("forward {}({}) to plc, size {}", ams_addr, socket_addr, size);
-                }
+    let server: TcpListener = TcpListener::bind(args.listen_addr).await?;
 
-                // reading stop
-                log::info!("reading {} stop", socket_addr);
-                forward_table.write().await.retain(|_, x| x.0 != socket_addr);
-            });
-        }
-    });
-
-    // plc reading loop
     loop {
-        let mut buff = vec![0; buffer_size];
-        match read_ams_packet(plc_addr, &mut plc_read, &mut buff).await {
-            Ok(size) => {
-                // parse ams header
-                let ams_header = AmsHeaderSlice::try_from(&buff[AmsTcpHeaderSlice::SIZE..]).unwrap();
-                let ams_addr = AmsAddr(ams_header.target_net_id(), ams_header.target_port());
+        let (mut client, remote) = select! {
+            a = server.accept() => a?,
+            _ = global_stop_rx.recv() => break,
+        };
+        log::info!("new socket {}", remote);
 
-                // forward
-                let mut has_error = false;
-                if let Some((addr, write)) = forward_table.read().await.get(&ams_addr) {
-                    let mut write = write.lock().await;
-                    if let Err(e) = write.write_all(&buff[..size]).await {
-                        log::error!("forward plc to {}({}) error: {}", ams_addr, addr, e);
-                        has_error = true;
-                    }
-                } else {
-                    log::warn!("ams {} not found", ams_addr)
-                }
+        let mut global_stop_rx = global_stop_rx.resubscribe();
+        let args = args.clone();
+        let forward_table = forward_table.clone();
+        let packet_size = args.buffer_size;
+        tokio::spawn(async move {
+            let (client_read, client_write) = client.split();
+            let (data_tx, data_rx) = mpsc::channel(128);
+            let (stop_tx, stop_rx) = broadcast::channel(1);
 
-                // check error
-                if has_error {
-                    forward_table.write().await.remove(&ams_addr);
-                }
+            let stop_rx1 = stop_rx.resubscribe();
+            let writing = writing(remote, client_write, stop_rx1, data_rx);
+            let reading = reading(remote, client_read, stop_rx, packet_size, data_tx, forward_table);
+
+            if let Err(e) = select! {
+                r = reading => r,
+                w = writing => w,
+                _ = global_stop_rx.recv() => Ok(()),
+            } {
+                log::error!("client {} error: {}", remote, e);
             }
-            Err(e) => {
-                log::error!("read plc error: {}", e);
-                break;
-            }
-        }
+            stop_tx.send(()).unwrap();
+        });
     }
+
+    log::warn!("accept client stopped");
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Arc::new(Args::parse());
+
+    // init logging
+    let log_level = if args.debug { "debug" } else { "info" };
+    env_logger::init_from_env(Env::default().default_filter_or(log_level));
+
+    // global forward tables and stop event
+    let forward_table: Table = Arc::new(RwLock::new(HashMap::new()));
+    let (stop_tx, stop_rx) = broadcast::channel(1);
+
+    let plc_task = connect_plc(args.clone(), forward_table.clone(), stop_rx.resubscribe());
+    let accept_task = accept_client(args.clone(), forward_table.clone(), stop_rx.resubscribe());
+
+    if let Err(e) = select! {
+        r = plc_task => r,
+        r = accept_task => r,
+    } {
+        log::error!("ads-proxy error: {}", e);
+    }
+    stop_tx.send(())?;
+
+    log::warn!("ads-proxy stopped");
 
     Ok(())
 }
