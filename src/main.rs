@@ -204,13 +204,17 @@ struct Args {
     #[arg(short, long)]
     pub debug: bool,
 
-    /// Maximum size of AMS packet
+    /// Buffer size (maximum size of a AMS packet)
     #[arg(short, long, default_value_t = 65536)]
     pub buffer_size: usize,
 
+    /// Queue size (cached packets per connection)
+    #[arg(short, long, default_value_t = 128)]
+    pub queue_size: usize,
+
     /// Optional ams net id route, e.g. 10.10.10.10.1.1
     #[arg(short, long)]
-    pub route: Option<AmsNetId>,
+    pub route_ams_net_id: Option<AmsNetId>,
 
     /// Optional PLC username (to add route)
     #[arg(short, long)]
@@ -222,7 +226,7 @@ struct Args {
 
     /// Optional Proxy hostname (hostname or ip address, detected from PLC connection)
     #[arg(long)]
-    pub host: Option<String>,
+    pub route_host: Option<String>,
 
     /// Proxy listen address
     #[arg(short, long, default_value = "127.0.0.1:48898")]
@@ -380,8 +384,8 @@ async fn connect_plc(args: Arc<Args>, table: Table, stop_rx: EventReceiver) -> R
     let host_addr = plc_client.local_addr()?;
 
     // add extra route
-    if let Some(ams_net_id) = args.route {
-        let route_host = args.host.clone().unwrap_or(host_addr.ip().to_string());
+    if let Some(ams_net_id) = args.route_ams_net_id {
+        let route_host = args.route_host.clone().unwrap_or(host_addr.ip().to_string());
         log::info!("add route {} host {} to plc", ams_net_id, route_host);
         ads::udp::add_route(
             (&plc_addr.ip().to_string(), ads::UDP_PORT),
@@ -396,11 +400,11 @@ async fn connect_plc(args: Arc<Args>, table: Table, stop_rx: EventReceiver) -> R
 
     // prepare queues
     let (read, write) = plc_client.into_split();
-    let (data_tx, data_rx) = mpsc::channel(128);
+    let (data_tx, data_rx) = mpsc::channel(args.queue_size);
     let (stop_tx, stop_rx) = broadcast::channel(1);
 
     // update forward table with plc ams net id
-    let plc_ams_net_id = args.route.unwrap_or(plc_info.netid.into());
+    let plc_ams_net_id = args.route_ams_net_id.unwrap_or(plc_info.netid.into());
     let plc_ams_addr = AmsAddr(plc_ams_net_id, 0);
     table.write().await.insert(plc_ams_addr, (plc_addr, data_tx.clone()));
 
@@ -439,9 +443,10 @@ async fn accept_client(args: Arc<Args>, forward_table: Table, stop_receiver: Eve
         let args = args.clone();
         let forward_table = forward_table.clone();
         let packet_size = args.buffer_size;
+        let queue_size = args.queue_size;
         tokio::spawn(async move {
             let (client_read, client_write) = client.split();
-            let (data_tx, data_rx) = mpsc::channel(128);
+            let (data_tx, data_rx) = mpsc::channel(queue_size);
             let (stop_tx, stop_rx) = broadcast::channel(1);
 
             let stop_rx1 = stop_rx.resubscribe();
