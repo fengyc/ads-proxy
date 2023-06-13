@@ -404,7 +404,8 @@ async fn connect_plc(args: Arc<Args>, table: Table, stop_rx: EventReceiver) -> R
     let (stop_tx, stop_rx) = broadcast::channel(1);
 
     // update forward table with plc ams net id
-    let plc_ams_net_id = args.route_ams_net_id.unwrap_or(plc_info.netid.into());
+    log::info!("updating forward table with plc {}", plc_info.netid);
+    let plc_ams_net_id = plc_info.netid.into();
     let plc_ams_addr = AmsAddr(plc_ams_net_id, 0);
     table.write().await.insert(plc_ams_addr, (plc_addr, data_tx.clone()));
 

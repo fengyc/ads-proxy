@@ -14,21 +14,35 @@ This is a [Beckhoff ADS][ads] proxy that could resolve multiple connections with
 Download binary from github release page or `cargo install ads-proxy`, then run `ads-proxy`.
 
 ```shell
+ADS proxy utility
+
 Usage: ads-proxy [OPTIONS] <PLC_ADDR>
 
 Arguments:
   <PLC_ADDR>  PLC address, e.g. 172.18.0.10:48898
 
 Options:
-  -d, --debug                      Debug mode
-  -b, --buffer-size <BUFFER_SIZE>  Maximum size of AMS packet [default: 65536]
-  -r, --route <ROUTE>              Optional ams net id route, e.g. 10.10.10.10.1.1
-  -u, --username <USERNAME>        Optional PLC username (to add route)
-  -p, --password <PASSWORD>        Optional PLC password (to add route)
-      --host <HOST>                Optional Proxy hostname (hostname or ip address, detected from PLC connection)
-  -l, --listen-addr <LISTEN_ADDR>  Proxy listen address [default: 127.0.0.1:48898]
-  -h, --help                       Print help
-  -V, --version                    Print version
+  -d, --debug
+          Debug mode
+  -b, --buffer-size <BUFFER_SIZE>
+          Buffer size (maximum size of a AMS packet) [default: 65536]
+  -q, --queue-size <QUEUE_SIZE>
+          Queue size (cached packets per connection) [default: 128]
+  -r, --route-ams-net-id <ROUTE_AMS_NET_ID>
+          Optional ams net id route, e.g. 10.10.10.10.1.1
+  -u, --username <USERNAME>
+          Optional PLC username (to add route)
+  -p, --password <PASSWORD>
+          Optional PLC password (to add route)
+      --route-host <ROUTE_HOST>
+          Optional Proxy hostname (hostname or ip address, detected from PLC connection)
+  -l, --listen-addr <LISTEN_ADDR>
+          Proxy listen address [default: 127.0.0.1:48898]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
+
 ```
 
 In pyads, connect to `ads-proxy`. For example, client 1 and 2 on a host:
