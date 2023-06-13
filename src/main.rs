@@ -6,9 +6,9 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{ensure, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use clap::Parser;
 use env_logger::Env;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -265,7 +265,6 @@ where
     Ok(size)
 }
 
-type EventSender = broadcast::Sender<()>;
 type EventReceiver = broadcast::Receiver<()>;
 type DataSender = mpsc::Sender<BytesMut>;
 type DataReceiver = mpsc::Receiver<BytesMut>;
