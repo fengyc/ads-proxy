@@ -304,6 +304,7 @@ where
 
         // parse result
         let ams_header = parse_ams_packet_slice(&buffer)?.1;
+        log::debug!("ams packet: {}", ams_header);
         let source_ams_addr = AmsAddr(ams_header.source_net_id(), ams_header.source_port());
         let target_ams_addr = AmsAddr(ams_header.target_net_id(), ams_header.target_port());
 
