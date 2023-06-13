@@ -384,9 +384,7 @@ where
     Ok(())
 }
 
-async fn connect_plc(args: Arc<Args>, table: Table, global_stop_rx: EventReceiver) -> Result<()> {
-    let mut global_stop_rx = global_stop_rx;
-
+async fn connect_plc(args: Arc<Args>, table: Table) -> Result<()> {
     // detect plc info
     let plc_info = ads::udp::get_info((&args.plc_addr.ip().to_string(), ads::UDP_PORT))?;
     log::info!("plc net_id={}", plc_info.netid);
@@ -433,9 +431,8 @@ async fn connect_plc(args: Arc<Args>, table: Table, global_stop_rx: EventReceive
     let writing = writing(plc_addr, write, stop_rx, data_rx);
 
     if let Err(e) = select! {
-        r = reading => r,
-        r = writing => r,
-        _ = global_stop_rx.recv() => Ok(())
+        r = tokio::spawn(reading) => r,
+        r = tokio::spawn(writing) => r,
     } {
         log::error!("plc error: {}", e);
     }
@@ -446,25 +443,19 @@ async fn connect_plc(args: Arc<Args>, table: Table, global_stop_rx: EventReceive
     Ok(())
 }
 
-async fn accept_client(args: Arc<Args>, table: Table, global_stop_rx: EventReceiver) -> Result<()> {
-    let mut global_stop_rx = global_stop_rx;
-
+async fn accept_client(args: Arc<Args>, table: Table) -> Result<()> {
     let server: TcpListener = TcpListener::bind(args.listen_addr).await?;
 
     loop {
-        let (mut client, remote) = select! {
-            a = server.accept() => a?,
-            _ = global_stop_rx.recv() => break,
-        };
+        let (client, remote) = server.accept().await?;
         log::info!("new socket {}", remote);
 
-        let mut global_stop_rx = global_stop_rx.resubscribe();
         let args = args.clone();
         let table = table.clone();
         let packet_size = args.buffer_size;
         let queue_size = args.queue_size;
         tokio::spawn(async move {
-            let (client_read, client_write) = client.split();
+            let (client_read, client_write) = client.into_split();
             let (data_tx, data_rx) = mpsc::channel(queue_size);
             let (stop_tx, stop_rx) = broadcast::channel(2);
 
@@ -474,9 +465,8 @@ async fn accept_client(args: Arc<Args>, table: Table, global_stop_rx: EventRecei
             let reading = reading(remote, client_read, stop_rx, packet_size, data_tx1, table.clone());
 
             if let Err(e) = select! {
-                r = reading => r,
-                w = writing => w,
-                _ = global_stop_rx.recv() => Ok(()),
+                r = tokio::spawn(reading) => r,
+                w = tokio::spawn(writing) => w,
             } {
                 log::error!("client {} error: {}", remote, e);
             }
@@ -495,10 +485,6 @@ async fn accept_client(args: Arc<Args>, table: Table, global_stop_rx: EventRecei
             });
         });
     }
-
-    log::warn!("accept client stopped");
-
-    Ok(())
 }
 
 #[tokio::main]
@@ -511,18 +497,16 @@ async fn main() -> Result<()> {
 
     // global forward tables and stop event
     let forward_table: Table = Arc::new(RwLock::new(HashMap::new()));
-    let (stop_tx, stop_rx) = broadcast::channel(1);
 
-    let plc_task = connect_plc(args.clone(), forward_table.clone(), stop_rx.resubscribe());
-    let accept_task = accept_client(args.clone(), forward_table.clone(), stop_rx.resubscribe());
+    let plc_task = connect_plc(args.clone(), forward_table.clone());
+    let accept_task = accept_client(args.clone(), forward_table.clone());
 
     if let Err(e) = select! {
-        r = plc_task => r,
-        r = accept_task => r,
+        r = tokio::spawn(plc_task) => r,
+        r = tokio::spawn(accept_task) => r,
     } {
         log::error!("ads-proxy error: {}", e);
     }
-    stop_tx.send(())?;
 
     log::warn!("ads-proxy stopped");
 
