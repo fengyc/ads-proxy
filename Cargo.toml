@@ -1,6 +1,6 @@
 [package]
 name = "ads-proxy"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2021"
 authors = ["fengyingcai <fengyc.work@gmail.com>"]
 description = "ADS proxy utility"
@@ -21,7 +21,6 @@ doc = false
 [dependencies]
 ads = "0.4.3"
 anyhow = "1.0.71"
-bytebuffer = "2.1.1"
 byteorder = "1.4.3"
 bytes = "1.4.0"
 clap = { version = "4.3.3", features = ["derive"] }

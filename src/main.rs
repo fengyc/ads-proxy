@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
@@ -236,35 +237,30 @@ struct Args {
     pub plc_addr: SocketAddr,
 }
 
-async fn read_ams_packet<T>(reader: &mut T, buf: &mut [u8]) -> Result<usize>
+async fn read_ams_packet<T>(reader: &mut T, buf: &mut BytesMut, packet_size: usize) -> Result<usize>
 where
     T: AsyncRead + Unpin,
 {
     let mut size;
-    let mut to_read;
 
     // check buffer
-    ensure!(
-        buf.len() >= AmsTcpHeaderSlice::SIZE + AmsHeaderSlice::SIZE,
-        "invalid buffer size"
-    );
+    buf.reserve(AmsTcpHeaderSlice::SIZE);
 
     // read ams tcp header
-    to_read = AmsTcpHeaderSlice::SIZE;
-    reader.read_exact(&mut buf[..to_read]).await?;
-    let ams_tcp_header = AmsTcpHeaderSlice::try_from(&buf[..to_read])?;
-    size = to_read;
+    unsafe { buf.set_len(buf.capacity()) };
+    reader.read_exact(&mut buf[..]).await?;
+    let ams_tcp_header = AmsTcpHeaderSlice::try_from(&buf[..])?;
+    let ams_length = ams_tcp_header.length() as usize;
+    size = buf.len();
 
     // check buffer again
-    ensure!(
-        buf.len() >= AMS_TCP_HEADER_SIZE + ams_tcp_header.length() as usize,
-        "invalid buffer size"
-    );
+    ensure!(ams_length <= packet_size - AmsTcpHeaderSlice::SIZE, "invalid packet");
+    buf.reserve(ams_length);
 
     // read ams packet content
-    to_read = size + ams_tcp_header.length() as usize;
-    reader.read_exact(&mut buf[size..to_read]).await?;
-    size = to_read;
+    unsafe { buf.set_len(buf.capacity()) };
+    reader.read_exact(&mut buf[size..]).await?;
+    size = buf.capacity();
 
     Ok(size)
 }
@@ -290,51 +286,38 @@ where
     let mut buffer = BytesMut::with_capacity(max_packet_size);
     let mut stop_rx = stop_rx;
 
-    let block_result: Result<()> = async move {
-        loop {
-            // prepare buffer
-            buffer.reserve(max_packet_size);
-            unsafe { buffer.set_len(max_packet_size) };
+    loop {
+        // read packet until error or stopped
+        let n = select! {
+            _ = stop_rx.recv() => break,
+            r = read_ams_packet(&mut reader, &mut buffer, max_packet_size) => r?,
+        };
+        unsafe { buffer.set_len(n) };
 
-            // read packet until error or stopped
-            let n = select! {
-                _ = stop_rx.recv() => break,
-                r = read_ams_packet(&mut reader, &mut buffer[..]) => r?,
-            };
-            unsafe { buffer.set_len(n) };
+        // parse result
+        let ams_header = parse_ams_packet_slice(&buffer)?.1;
+        log::debug!("ams packet: {}", ams_header);
+        let source_ams_addr = AmsAddr(ams_header.source_net_id(), ams_header.source_port());
+        let target_ams_addr = AmsAddr(ams_header.target_net_id(), ams_header.target_port());
 
-            // parse result
-            let ams_header = parse_ams_packet_slice(&buffer)?.1;
-            log::debug!("ams packet: {}", ams_header);
-            let source_ams_addr = AmsAddr(ams_header.source_net_id(), ams_header.source_port());
-            let target_ams_addr = AmsAddr(ams_header.target_net_id(), ams_header.target_port());
-
-            // update forward table
-            if Some(true) != table.read().await.get(&source_ams_addr).map(|x| x.0 == remote) {
-                log::info!("update forward table {} socket {}", source_ams_addr, remote);
-                let mut table = table.write().await;
-                table.insert(source_ams_addr, (remote, data_tx.clone()));
-            }
-
-            // forward data
-            let packet = buffer.split();
-            let forward_table = table.read().await;
-            let target = forward_table.get(&target_ams_addr);
-            let target = target.or_else(|| forward_table.get(&AmsAddr(target_ams_addr.0, 0)));
-            if let Some((target_remote, target_sender)) = target {
-                log::debug!("forward {} to socket {}", target_ams_addr, target_remote);
-                target_sender.send(packet).await?;
-            } else {
-                log::debug!("can not handle {}", target_ams_addr)
-            }
+        // update forward table
+        if Some(true) != table.read().await.get(&source_ams_addr).map(|x| x.0 == remote) {
+            log::info!("update forward table {} socket {}", source_ams_addr, remote);
+            let mut table = table.write().await;
+            table.insert(source_ams_addr, (remote, data_tx.clone()));
         }
 
-        Ok(())
-    }
-    .await;
-
-    if let Err(e) = block_result {
-        log::error!("read socket {} error: {}", remote, e);
+        // forward data
+        let packet = buffer.split();
+        let forward_table = table.read().await;
+        let target = forward_table.get(&target_ams_addr);
+        let target = target.or_else(|| forward_table.get(&AmsAddr(target_ams_addr.0, 0)));
+        if let Some((target_remote, target_sender)) = target {
+            log::debug!("forward {} to socket {}", target_ams_addr, target_remote);
+            target_sender.send(packet).await?;
+        } else {
+            log::debug!("can not handle {}", target_ams_addr)
+        }
     }
 
     log::info!("reading socket {} stopped", remote);
@@ -350,33 +333,24 @@ where
     let mut stop_rx = stop_rx;
     let mut data_rx = data_rx;
 
-    let block_result: Result<()> = async move {
-        loop {
-            // read packet
-            let packet = select! {
-                _ = stop_rx.recv() => break,
-                p = data_rx.recv() => match p {
-                    Some(p) => p,
-                    _ => break,
-                },
-            };
-            if packet.is_empty() {
-                break;
-            }
-            // write data
-            select! {
-                _ = stop_rx.recv() => break,
-                r = writer.write_all(&packet) => r?,
-            };
-            log::debug!("write socket {} {} bytes", socket_addr, packet.len());
+    loop {
+        // read packet
+        let packet = select! {
+            _ = stop_rx.recv() => break,
+            p = data_rx.recv() => match p {
+                Some(p) => p,
+                _ => break,
+            },
+        };
+        if packet.is_empty() {
+            break;
         }
-
-        Ok(())
-    }
-    .await;
-
-    if let Err(e) = block_result {
-        log::error!("write socket {} error: {}", socket_addr, e);
+        // write data
+        select! {
+            _ = stop_rx.recv() => break,
+            r = writer.write_all(&packet) => r?,
+        }
+        log::debug!("write socket {} {} bytes", socket_addr, packet.len());
     }
 
     log::info!("writing socket {} stopped", socket_addr);
