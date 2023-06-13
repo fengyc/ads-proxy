@@ -333,30 +333,25 @@ where
     Ok(())
 }
 
-async fn writing<T>(
-    socket_addr: SocketAddr,
-    writer: T,
-    stop_receiver: EventReceiver,
-    receiver: DataReceiver,
-) -> Result<()>
+async fn writing<T>(socket_addr: SocketAddr, writer: T, stop_rx: EventReceiver, data_rx: DataReceiver) -> Result<()>
 where
     T: AsyncWrite + Unpin,
 {
     let mut writer = writer;
-    let mut stop_receiver = stop_receiver;
-    let mut receiver = receiver;
+    let mut stop_rx = stop_rx;
+    let mut data_rx = data_rx;
     loop {
         // read packet
         let packet = select! {
-            _ = stop_receiver.recv() => break,
-            p = receiver.recv() => match p {
+            _ = stop_rx.recv() => break,
+            p = data_rx.recv() => match p {
                 Some(p) => p,
                 _ => break,
             },
         };
         // write data
         select! {
-            _ = stop_receiver.recv() => break,
+            _ = stop_rx.recv() => break,
             r = writer.write_all(&packet) => r?,
         }
         log::debug!("write socket {} {} bytes", socket_addr, packet.len());
@@ -449,7 +444,7 @@ async fn accept_client(args: Arc<Args>, table: Table, stop_receiver: EventReceiv
         tokio::spawn(async move {
             let (client_read, client_write) = client.split();
             let (data_tx, data_rx) = mpsc::channel(queue_size);
-            let (stop_tx, stop_rx) = broadcast::channel(1);
+            let (stop_tx, stop_rx) = broadcast::channel(2);
 
             let stop_rx1 = stop_rx.resubscribe();
             let writing = writing(remote, client_write, stop_rx1, data_rx);
@@ -462,7 +457,9 @@ async fn accept_client(args: Arc<Args>, table: Table, stop_receiver: EventReceiv
             } {
                 log::error!("client {} error: {}", remote, e);
             }
-            stop_tx.send(()).unwrap();
+            if let Err(e) = stop_tx.send(()) {
+                log::error!("stop client {} error: {}", remote, e);
+            }
 
             // clean table
             table.write().await.retain(|a, x| {
