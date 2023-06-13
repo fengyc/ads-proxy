@@ -429,7 +429,7 @@ async fn connect_plc(args: Arc<Args>, table: Table, stop_rx: EventReceiver) -> R
     Ok(())
 }
 
-async fn accept_client(args: Arc<Args>, forward_table: Table, stop_receiver: EventReceiver) -> Result<()> {
+async fn accept_client(args: Arc<Args>, table: Table, stop_receiver: EventReceiver) -> Result<()> {
     let mut global_stop_rx = stop_receiver;
 
     let server: TcpListener = TcpListener::bind(args.listen_addr).await?;
@@ -443,7 +443,7 @@ async fn accept_client(args: Arc<Args>, forward_table: Table, stop_receiver: Eve
 
         let mut global_stop_rx = global_stop_rx.resubscribe();
         let args = args.clone();
-        let forward_table = forward_table.clone();
+        let table = table.clone();
         let packet_size = args.buffer_size;
         let queue_size = args.queue_size;
         tokio::spawn(async move {
@@ -453,7 +453,7 @@ async fn accept_client(args: Arc<Args>, forward_table: Table, stop_receiver: Eve
 
             let stop_rx1 = stop_rx.resubscribe();
             let writing = writing(remote, client_write, stop_rx1, data_rx);
-            let reading = reading(remote, client_read, stop_rx, packet_size, data_tx, forward_table);
+            let reading = reading(remote, client_read, stop_rx, packet_size, data_tx, table.clone());
 
             if let Err(e) = select! {
                 r = reading => r,
@@ -463,6 +463,16 @@ async fn accept_client(args: Arc<Args>, forward_table: Table, stop_receiver: Eve
                 log::error!("client {} error: {}", remote, e);
             }
             stop_tx.send(()).unwrap();
+
+            // clean table
+            table.write().await.retain(|a, x| {
+                if x.0 == remote {
+                    log::info!("remove table {} socket {}", a, x.0);
+                    false
+                } else {
+                    true
+                }
+            });
         });
     }
 
