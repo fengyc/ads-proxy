@@ -334,7 +334,7 @@ where
     .await;
 
     if let Err(e) = block_result {
-        log::info!("read socket {} error: {}", remote, e);
+        log::error!("read socket {} error: {}", remote, e);
     }
 
     log::info!("reading socket {} stopped", remote);
@@ -349,27 +349,34 @@ where
     let mut writer = writer;
     let mut stop_rx = stop_rx;
     let mut data_rx = data_rx;
-    loop {
-        // read packet
-        let packet = select! {
-            _ = stop_rx.recv() => break,
-            p = data_rx.recv() => match p {
-                Some(p) => p,
-                _ => break,
-            },
-        };
-        if packet.is_empty() {
-            break;
+
+    let block_result: Result<()> = async move {
+        loop {
+            // read packet
+            let packet = select! {
+                _ = stop_rx.recv() => break,
+                p = data_rx.recv() => match p {
+                    Some(p) => p,
+                    _ => break,
+                },
+            };
+            if packet.is_empty() {
+                break;
+            }
+            // write data
+            select! {
+                _ = stop_rx.recv() => break,
+                r = writer.write_all(&packet) => r?,
+            };
+            log::debug!("write socket {} {} bytes", socket_addr, packet.len());
         }
-        // write data
-        select! {
-            _ = stop_rx.recv() => break,
-            r = writer.write_all(&packet) => if let Err(e) = r {
-                    log::error!("write socket {} error: {}", socket_addr, e);
-                    break;
-                }
-        }
-        log::debug!("write socket {} {} bytes", socket_addr, packet.len());
+
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = block_result {
+        log::error!("write socket {} error: {}", socket_addr, e);
     }
 
     log::info!("writing socket {} stopped", socket_addr);
