@@ -240,28 +240,24 @@ async fn read_ams_packet<T>(reader: &mut T, buf: &mut BytesMut, packet_size: usi
 where
     T: AsyncRead + Unpin,
 {
-    let mut size;
-
     // check buffer
     buf.reserve(AmsTcpHeaderSlice::SIZE);
+    unsafe { buf.set_len(AmsTcpHeaderSlice::SIZE) };
 
     // read ams tcp header
-    unsafe { buf.set_len(buf.capacity()) };
     reader.read_exact(&mut buf[..]).await?;
     let ams_tcp_header = AmsTcpHeaderSlice::try_from(&buf[..])?;
     let ams_length = ams_tcp_header.length() as usize;
-    size = buf.len();
 
     // check buffer again
     ensure!(ams_length <= packet_size - AmsTcpHeaderSlice::SIZE, "invalid packet");
     buf.reserve(ams_length);
+    unsafe { buf.set_len(buf.len() + ams_length) }
 
     // read ams packet content
-    unsafe { buf.set_len(buf.capacity()) };
-    reader.read_exact(&mut buf[size..]).await?;
-    size = buf.capacity();
+    reader.read_exact(&mut buf[AmsTcpHeaderSlice::SIZE..]).await?;
 
-    Ok(size)
+    Ok(buf.len())
 }
 
 type EventReceiver = broadcast::Receiver<()>;
@@ -291,7 +287,6 @@ where
             _ = stop_rx.recv() => break,
             r = read_ams_packet(&mut reader, &mut buffer, max_packet_size) => r?,
         };
-        unsafe { buffer.set_len(n) };
 
         // parse result
         let ams_header = parse_ams_packet_slice(&buffer)?.1;
