@@ -283,7 +283,7 @@ where
 
     loop {
         // read packet until error or stopped
-        let n = select! {
+        let _n = select! {
             _ = stop_rx.recv() => break,
             r = read_ams_packet(&mut reader, &mut buffer, max_packet_size) => r?,
         };
