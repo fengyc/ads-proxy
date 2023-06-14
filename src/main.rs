@@ -281,42 +281,45 @@ where
     let mut buffer = BytesMut::with_capacity(max_packet_size);
     let mut stop_rx = stop_rx;
 
-    loop {
-        // read packet until error or stopped
-        let _n = select! {
-            _ = stop_rx.recv() => break,
-            r = read_ams_packet(&mut reader, &mut buffer, max_packet_size) => r?,
-        };
+    let result = async move {
+        loop {
+            // read packet until error or stopped
+            let _n = select! {
+                _ = stop_rx.recv() => break,
+                r = read_ams_packet(&mut reader, &mut buffer, max_packet_size) => r?,
+            };
 
-        // parse result
-        let ams_header = parse_ams_packet_slice(&buffer)?.1;
-        log::debug!("ams packet: {}", ams_header);
-        let source_ams_addr = AmsAddr(ams_header.source_net_id(), ams_header.source_port());
-        let target_ams_addr = AmsAddr(ams_header.target_net_id(), ams_header.target_port());
+            // parse result
+            let ams_header = parse_ams_packet_slice(&buffer)?.1;
+            log::debug!("ams packet: {}", ams_header);
+            let source_ams_addr = AmsAddr(ams_header.source_net_id(), ams_header.source_port());
+            let target_ams_addr = AmsAddr(ams_header.target_net_id(), ams_header.target_port());
 
-        // update forward table
-        if Some(true) != table.read().await.get(&source_ams_addr).map(|x| x.0 == remote) {
-            log::info!("update forward table {} socket {}", source_ams_addr, remote);
-            let mut table = table.write().await;
-            table.insert(source_ams_addr, (remote, data_tx.clone()));
+            // update forward table
+            if Some(true) != table.read().await.get(&source_ams_addr).map(|x| x.0 == remote) {
+                log::info!("update forward table {} socket {}", source_ams_addr, remote);
+                let mut table = table.write().await;
+                table.insert(source_ams_addr, (remote, data_tx.clone()));
+            }
+
+            // forward data
+            let packet = buffer.split();
+            let forward_table = table.read().await;
+            let target = forward_table.get(&target_ams_addr);
+            let target = target.or_else(|| forward_table.get(&AmsAddr(target_ams_addr.0, 0)));
+            if let Some((target_remote, target_sender)) = target {
+                log::debug!("forward {} to socket {}", target_ams_addr, target_remote);
+                target_sender.send(packet).await?;
+            } else {
+                log::debug!("can not handle {}", target_ams_addr)
+            }
         }
-
-        // forward data
-        let packet = buffer.split();
-        let forward_table = table.read().await;
-        let target = forward_table.get(&target_ams_addr);
-        let target = target.or_else(|| forward_table.get(&AmsAddr(target_ams_addr.0, 0)));
-        if let Some((target_remote, target_sender)) = target {
-            log::debug!("forward {} to socket {}", target_ams_addr, target_remote);
-            target_sender.send(packet).await?;
-        } else {
-            log::debug!("can not handle {}", target_ams_addr)
-        }
+        Ok(())
     }
+    .await;
 
     log::info!("reading socket {} stopped", remote);
-
-    Ok(())
+    result
 }
 
 async fn writing<T>(socket_addr: SocketAddr, writer: T, stop_rx: EventReceiver, data_rx: DataReceiver) -> Result<()>
@@ -327,29 +330,32 @@ where
     let mut stop_rx = stop_rx;
     let mut data_rx = data_rx;
 
-    loop {
-        // read packet
-        let packet = select! {
-            _ = stop_rx.recv() => break,
-            p = data_rx.recv() => match p {
-                Some(p) => p,
-                _ => break,
-            },
-        };
-        if packet.is_empty() {
-            break;
+    let result = async move {
+        loop {
+            // read packet
+            let packet = select! {
+                _ = stop_rx.recv() => break,
+                p = data_rx.recv() => match p {
+                    Some(p) => p,
+                    _ => break,
+                },
+            };
+            if packet.is_empty() {
+                break;
+            }
+            // write data
+            select! {
+                _ = stop_rx.recv() => break,
+                r = writer.write_all(&packet) => r?,
+            }
+            log::debug!("write socket {} {} bytes", socket_addr, packet.len());
         }
-        // write data
-        select! {
-            _ = stop_rx.recv() => break,
-            r = writer.write_all(&packet) => r?,
-        }
-        log::debug!("write socket {} {} bytes", socket_addr, packet.len());
+        Ok(())
     }
+    .await;
 
     log::info!("writing socket {} stopped", socket_addr);
-
-    Ok(())
+    result
 }
 
 async fn connect_plc(args: Arc<Args>, table: Table) -> Result<()> {
