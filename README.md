@@ -4,7 +4,8 @@
 
 This is a [Beckhoff ADS][ads] proxy that could resolve multiple connections with same ip address issues.
 
-* ads issue: https://github.com/Beckhoff/ADS/issues/49
+* ads issue1: https://github.com/Beckhoff/ADS/issues/49 
+* ads issue2: https://github.com/Beckhoff/ADS/issues/201
 * pyads issue: https://github.com/stlehmann/pyads/issues/331
 
 [ads]: https://download.beckhoff.com/download/Document/automation/twincat3/TwinCAT_3_ADS_INTRO_EN.pdf
