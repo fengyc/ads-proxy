@@ -2,7 +2,7 @@
 
 [![build-main](https://github.com/fengyc/ads-proxy/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/fengyc/ads-proxy/actions/workflows/main.yml)
 
-This is a [Beckhoff ADS][ads] proxy that could resolve multiple connections with same ip address issues.
+This is a [Beckhoff ADS][ads] proxy that could resolve multiple tcp connections with same ip address issues.
 
 * ads issue1: https://github.com/Beckhoff/ADS/issues/49 
 * ads issue2: https://github.com/Beckhoff/ADS/issues/201
@@ -63,12 +63,17 @@ ads-proxy -r 10.10.10.10.1.1 192.168.0.10:48898
 ```python
 import pyads
 
-pyads.open_port()
-pyads.set_local_address("10.10.10.10.1.x")  # x=1 or 2
-pyads.close_port()
+# x=1 or 2, process instance should have a unique ams net id
+pyads.set_local_address("10.10.10.10.1.x")  
 
-plc = pyads.Connection(ams_net_id="192.168.0.10.1.1", ams_net_port=851, ip_address="127.0.0.1")
-with plc:
+plc1 = pyads.Connection(ams_net_id="192.168.0.10.1.1", ams_net_port=851, ip_address="127.0.0.1")
+with plc1:
+    ...
+
+# app can create multiple ADS connections
+# the packets will be sent in ONE tcp connection in a process instance
+plc2 = pyads.Connection(ams_net_id="192.168.0.10.1.1", ams_net_port=851, ip_address="127.0.0.1")
+with plc2:
     ...
 ```
 
