@@ -36,6 +36,30 @@ jobs:
           path: |
             target/**/ads-proxy_*
 
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v2
+      - uses: Swatinem/rust-cache@v2
+      - name: build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup target add $TARGET
+          cargo build --release --target $TARGET
+          (cd target/${TARGET}/release && mv ads-proxy ads-proxy_${TARGET})
+            - name: Upload artifact
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            target/**/ads-proxy_*
+
   build-windows:
     runs-on: windows-latest
     strategy:
