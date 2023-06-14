@@ -47,8 +47,8 @@ jobs:
           rustup target add $TARGET
           cargo build --release --target $TARGET
           (cd target/${TARGET}/release && mv ads-proxy ads-proxy_${TARGET})
-            - name: Upload artifact
-      - uses: actions/upload-artifact@v3
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.target }}
           path: |
