@@ -363,7 +363,7 @@ async fn connect_plc(args: Arc<Args>, table: Table) -> Result<()> {
 
     // connect plc backend
     log::info!("connecting plc {}...", args.plc_addr);
-    let plc_client = TcpStream::connect(args.plc_addr).await?;
+    let mut plc_client = TcpStream::connect(args.plc_addr).await?;
     let plc_addr = plc_client.peer_addr()?;
     let host_addr = plc_client.local_addr()?;
 
@@ -380,6 +380,10 @@ async fn connect_plc(args: Arc<Args>, table: Table) -> Result<()> {
             args.password.as_deref(),
             true,
         )?;
+
+        // reconnect plc
+        plc_client.shutdown().await?;
+        plc_client = TcpStream::connect(args.plc_addr).await?;
     }
 
     // prepare queues
