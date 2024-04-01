@@ -295,20 +295,20 @@ where
             let source_ams_addr = AmsAddr(ams_header.source_net_id(), ams_header.source_port());
             let target_ams_addr = AmsAddr(ams_header.target_net_id(), ams_header.target_port());
 
-            // update forward table
+            // update proxy table
             if Some(true) != table.read().await.get(&source_ams_addr).map(|x| x.0 == remote) {
-                log::info!("update forward table {} socket {}", source_ams_addr, remote);
+                log::info!("update proxy table {} socket {}", source_ams_addr, remote);
                 let mut table = table.write().await;
                 table.insert(source_ams_addr, (remote, data_tx.clone()));
             }
 
-            // forward data
+            // proxy data
             let packet = buffer.split();
-            let forward_table = table.read().await;
-            let target = forward_table.get(&target_ams_addr);
-            let target = target.or_else(|| forward_table.get(&AmsAddr(target_ams_addr.0, 0)));
+            let proxy_table = table.read().await;
+            let target = proxy_table.get(&target_ams_addr);
+            let target = target.or_else(|| proxy_table.get(&AmsAddr(target_ams_addr.0, 0)));
             if let Some((target_remote, target_sender)) = target {
-                log::debug!("forward {} to socket {}", target_ams_addr, target_remote);
+                log::debug!("proxy {} to socket {}", target_ams_addr, target_remote);
                 target_sender.send(packet).await?;
             } else {
                 log::debug!("can not handle {}", target_ams_addr)
@@ -397,8 +397,8 @@ async fn connect_plc(args: Arc<Args>, table: Table) -> Result<()> {
     let (data_tx, data_rx) = mpsc::channel(args.queue_size);
     let (stop_tx, stop_rx) = broadcast::channel(1);
 
-    // update forward table with plc ams net id
-    log::info!("updating forward table with plc {}", plc_info.netid);
+    // update proxy table with plc ams net id
+    log::info!("updating proxy table with plc {}", plc_info.netid);
     let plc_ams_net_id = plc_info.netid.into();
     let plc_ams_addr = AmsAddr(plc_ams_net_id, 0);
     table.write().await.insert(plc_ams_addr, (plc_addr, data_tx.clone()));
@@ -473,11 +473,11 @@ async fn main() -> Result<()> {
     let log_level = if args.debug { "debug" } else { "info" };
     env_logger::init_from_env(Env::default().default_filter_or(log_level));
 
-    // global forward tables and stop event
-    let forward_table: Table = Arc::new(RwLock::new(HashMap::new()));
+    // global proxy tables and stop event
+    let proxy_table: Table = Arc::new(RwLock::new(HashMap::new()));
 
-    let plc_task = connect_plc(args.clone(), forward_table.clone());
-    let accept_task = accept_client(args.clone(), forward_table.clone());
+    let plc_task = connect_plc(args.clone(), proxy_table.clone());
+    let accept_task = accept_client(args.clone(), proxy_table.clone());
 
     if let Err(e) = select! {
         r = tokio::spawn(plc_task) => r,
