@@ -4,7 +4,7 @@
 
 This is a [Beckhoff ADS][ads] proxy that could resolve multiple tcp connections with same ip address issues.
 
-* ads issue1: https://github.com/Beckhoff/ADS/issues/49 
+* ads issue1: https://github.com/Beckhoff/ADS/issues/49
 * ads issue2: https://github.com/Beckhoff/ADS/issues/201
 * pyads issue: https://github.com/stlehmann/pyads/issues/331
 
@@ -46,13 +46,14 @@ Options:
 
 ```
 
-In pyads, connect to `ads-proxy`. For example, client 1 and 2 on a host:
+In pyads, connect to `ads-proxy`. For example, client 1 and 2 (process 1 and 2) on a host:
 
 * plc `ams_net_id=192.168.0.10.1.1`
 * client 1 `ams_net_id=10.10.10.10.1.1`
 * client 2 `ams_net_id=10.10.10.10.1.2`
 
-Might need to add route entry in shell command with `-r` or in PLC configuration, see [default user and password][password]
+Might need to add route entry in shell command with `-r` or in PLC configuration,
+see [default user and password][password]
 
 [password]: https://infosys.beckhoff.com/english.php?content=../content/1033/sw_os/2019206411.html&id=3176926840725427056
 
@@ -60,15 +61,26 @@ Might need to add route entry in shell command with `-r` or in PLC configuration
 ads-proxy -r 10.10.10.10.1.1 192.168.0.10:48898
 ```
 
+client 1 (process 1)
+
 ```python
 import pyads
 
 # x=1 or 2, process instance should have a unique ams net id
-pyads.set_local_address("10.10.10.10.1.x")  
+pyads.set_local_address("10.10.10.10.1.1")
 
 plc1 = pyads.Connection(ams_net_id="192.168.0.10.1.1", ams_net_port=851, ip_address="127.0.0.1")
 with plc1:
     ...
+```
+
+client 2 (process 2)
+
+```python
+import pyads
+
+# x=1 or 2, process instance should have a unique ams net id
+pyads.set_local_address("10.10.10.10.1.2")
 
 # app can create multiple ADS connections
 # the packets will be sent in ONE tcp connection in a process instance
