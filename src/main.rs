@@ -479,13 +479,11 @@ async fn main() -> Result<()> {
     let plc_task = connect_plc(args.clone(), proxy_table.clone());
     let accept_task = accept_client(args.clone(), proxy_table.clone());
 
-    if let Err(e) = select! {
+    let e = select! {
         r = tokio::spawn(plc_task) => r,
         r = tokio::spawn(accept_task) => r,
-    } {
-        log::error!("ads-proxy error: {}", e);
-    }
-
+    };
+    log::error!("ads-proxy error: {:?}", e);
     log::warn!("ads-proxy stopped");
 
     Ok(())
