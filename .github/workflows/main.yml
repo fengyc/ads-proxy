@@ -81,7 +81,7 @@ jobs:
           cargo build --release --target $env:TARGET
           cd target/$env:TARGET/release && mv ads-proxy.exe ads-proxy_$env:TARGET.exe
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: |
@@ -95,7 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
       - uses: "marvinpinto/action-automatic-releases@latest"
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
